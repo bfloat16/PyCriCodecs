@@ -1,26 +1,9 @@
-from typing import BinaryIO, TypeVar, Type, List
-T = TypeVar('T')
 from io import BytesIO, FileIO
 from struct import unpack, calcsize
+
 from .chunk import *
 
-# FIXME Really awful. Although works.
 class UTF:
-    """ Use this class to return a dict containing all @UTF chunk information. """
-    __slots__ = ["magic", "table_size", "rows_offset", "string_offset", "data_offset", "table_name", "num_columns", "row_length", "num_rows", "stream", "table", "__payload", "encoding"]
-    magic: bytes
-    table_size: int
-    rows_offset: int
-    string_offset: int
-    data_offset: int
-    table_name: int
-    num_columns: int
-    row_length: int
-    num_rows: int
-    stream: BinaryIO
-    table: dict
-    __payload: list
-    encoding: str
     def __init__(self, stream):
         if type(stream) == str:
             self.stream = FileIO(stream)
@@ -70,9 +53,9 @@ class UTF:
             elif stflag == 0x7: # Exists in old CPK's.
                 # target_tuple.append((int.from_bytes(stream.read(4), "big"), int.from_bytes(stream.read(calcsize(self.stringtypes(typeflag))), "big")))
                 # types[3].append((">"+self.stringtypes(typeflag), typeflag))
-                raise NotImplementedError("Unsupported 0x70 storage flag.")
+                raise NotImplementedError("UTF: Unsupported 0x70 storage flag.")
             else:
-                raise Exception("Unknown storage flag.")
+                raise Exception("UTF: Unknown storage flag.")
         
         rows  = []
         table = dict()
@@ -101,7 +84,7 @@ class UTF:
                             continue
                     else:
                         # Probably useless.
-                        raise UnicodeDecodeError(f"String of unknown encoding: {strings[i]}")
+                        raise UnicodeDecodeError(f"UTF: String of unknown encoding: {strings[i]}")
         t_t_dict = dict()
         self.table_name = strings_copy[self.finder(self.table_name, strings)]
         UTFTypeValuesList = list(UTFTypeValues)
@@ -182,65 +165,3 @@ class UTF:
         # despite, what seems to me, nothing stopping it for being any of the other 3 encodings,
         # since the header allows it.
         return self.__payload
-
-class UTFViewer(object):
-    """Base class for a non-owning view of a UTF table dictionary, or a list of which.
-    Nested classes are supported.
-    
-    Example:
-    ```python
-        class CueNameTable(UTFViewer):
-            CueName : str
-            CueIndex : int
-        class ACBTable(UTFViewer):
-            CueNameTable : List[CueNameTable]
-            Awb : AWB
-
-        src = ACB(ACB_sample)
-        payload = ACBTable(src.payload)
-        name = payload.CueNameTable
-        name_str = name[0].CueName
-    ```
-    """
-    _payload : dict
-    def __init__(self, payload):
-        assert isinstance(payload, dict), "Payload must be a dictionary"
-        super().__setattr__('_payload', payload)
-
-    def __getattr__(self, item):
-        annotations = super().__getattribute__('__annotations__')
-        # Nested definitions
-        if item in annotations:
-            sub = annotations[item]
-            reduced = getattr(sub, "__args__", [None])[0]
-            reduced = reduced or sub
-            if issubclass(reduced, UTFViewer):
-                return self._view_as(self._payload[item], reduced)
-        payload = super().__getattribute__('_payload')
-        if item not in payload:
-            return super().__getattribute__(item)
-        _, value = payload[item]
-        return value
-
-    def __setattr__(self, item, value):
-        payload = super().__getattribute__('_payload')
-        if item not in payload:
-            raise AttributeError(f"{item} not in payload")
-        typeof, _ = payload[item]
-        payload[item] = (typeof, value)
-
-    def __dir__(self):
-        annotations = super().__getattribute__('__annotations__')
-        return list(annotations.keys()) + list(super().__dir__())
-
-    @staticmethod
-    def _view_as(payload: dict, clazz: Type[T]) -> T:        
-        if not issubclass(clazz, UTFViewer):
-            raise TypeError("class must be a subclass of UTFViewer")
-        return clazz(payload)
-
-    def __new__(cls: Type[T], payload: list | dict) -> T | List[T]:
-        if isinstance(payload, list):
-            return [cls._view_as(item, cls) for item in payload]
-        return super().__new__(cls)
-    

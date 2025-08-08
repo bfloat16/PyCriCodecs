@@ -1,81 +1,23 @@
-import os
-from typing import List
 from .chunk import *
-from .utf import UTF, UTFViewer
-from .awb import AWB
+from .utf import UTF
 
-class CueNameTable(UTFViewer):
-    CueIndex: int
-    CueName: str
-
-class CueTable(UTFViewer):
-    CueId: int
-    ReferenceIndex: int
-    ReferenceType: int
-
-class SequenceTable(UTFViewer):
-    TrackIndex: bytes
-    Type: int
-
-class SynthTable(UTFViewer):
-    ReferenceItems: bytes
-
-class TrackEventTable(UTFViewer):
-    Command: bytes
-
-class TrackTable(UTFViewer):
-    EventIndex: int
-
-class WaveformTable(UTFViewer):
-    EncodeType: int
-    MemoryAwbId: int
-    NumChannels: int
-    NumSamples: int
-    SamplingRate: int
-    Streaming: int
-
-class ACBTable(UTFViewer):
-    Name: str
-    Version: int
-    VersionString: str
-
-    AwbFile: List[bytes]
-    CueNameTable: List[CueNameTable]
-    CueTable: List[CueTable]
-    SequenceTable: List[SequenceTable]
-    SynthTable: List[SynthTable]
-    TrackEventTable: List[TrackEventTable]
-    TrackTable: List[TrackTable]
-    WaveformTable: List[WaveformTable]
-
-class ACB(UTF):
-    __slots__ = ["filename", "_payload", "filename", "_table_names", "awb"]
-    _payload: list
-    filename: str
-    _table_names: dict  # XXX: Hacky. Though with current routines this would be otherwise dropped, decoders need this.
-    awb: AWB
-
+class ACB():
     def __init__(self, filename):
         self._payload = UTF(filename).get_payload()
-        self.filename = filename
-        self._table_names = {}
         self.acbparse(self._payload)
-        # TODO check on ACB version.
 
     def acbparse(self, payload):
-        """Recursively parse the payload."""
         for dict in range(len(payload)):
             for k, v in payload[dict].items():
                 if v[0] == UTFTypeValues.bytes:
                     if v[1].startswith(UTFType.UTF.value):  # or v[1].startswith(UTFType.EUTF.value): # ACB's never gets encrypted?
                         par = UTF(v[1])
-                        self._table_names[(dict, k)] = par.table_name
                         par = par.get_payload()
                         payload[dict][k] = par
                         self.acbparse(par)
 
     def extract(self):
-        payload = self.payload
+        payload = self._payload[0]
 
         def u8(b, o):  return b[o]
         def u16be(b, o): return int.from_bytes(b[o:o+2], "big", signed=False)

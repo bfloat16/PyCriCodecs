@@ -1,21 +1,10 @@
+import os
 from io import BytesIO, FileIO
-from typing import BinaryIO
 from struct import iter_unpack
+
 from .chunk import *
 
 class AWB:
-    __slots__ = ["stream", "numfiles", "align", "subkey", "version", "ids", "ofs", "filename", "headersize", "id_alignment", "id_intsize"]
-    stream: BinaryIO
-    numfiles: int
-    align: int
-    subkey: bytes
-    version: int
-    ids: list
-    ofs: list
-    filename: str
-    headersize: int
-    id_alignment: int
-
     def __init__(self, stream):
         if type(stream) == str:
             self.stream = FileIO(stream)
@@ -45,30 +34,50 @@ class AWB:
             self.headersize = self.headersize + (self.align - (self.headersize % self.align))
         self.stream.seek(self.headersize, 0)
 
-    def extract(self):
-        count = 0
-        for i in self.getfiles():
-            # Apparently AWB's can have many types of files, focusing on HCA's here though. So TODO.
-            if self.filename:
-                if i.startswith(HCAType.HCA.value) or i.startswith(HCAType.EHCA.value):
-                    filename = self.filename.rsplit(".", 1)[0] + "_" + str(count) + ".hca"
-                else:
-                    raise ValueError("Not HCA.")
-                open(filename, "wb").write(i)
-                count += 1
-            else:
-                if i.startswith(HCAType.HCA.value) or i.startswith(HCAType.EHCA.value):
-                    open(str(count)+".hca", "wb").write(i)
-                else:
-                    open(str(count)+".dat", "wb").write(i)
-                count += 1
+    def extract(self, a: dict, exp_dir: str):
+        os.makedirs(exp_dir, exist_ok=True)
 
-    def getfiles(self):
+        # 1) 先处理 a，生成反转映射 rev（只保留有索引的项）
+        rev = {}
+        for name, idx_list in a.items():
+            if len(idx_list) > 1:
+                raise ValueError(f"{name} 对应多个 index: {idx_list}")
+            if len(idx_list) == 1:  # 有索引才保留
+                idx = idx_list[0]
+                if idx in rev:
+                    raise ValueError(f"索引冲突：index {idx} 映射到 {rev[idx]} 和 {name}")
+                rev[idx] = name
 
+        # 2) 检查段数是否一致
+        segment_count = len(self.ofs) - 1  # 段总数
+        if len(rev) != segment_count:
+            raise ValueError(f"映射段数 {len(rev)} 与实际段数 {segment_count} 不一致")
+
+        # 3) 校验 ofs 递增
         for i in range(1, len(self.ofs)):
-            data = self.stream.read((self.ofs[i] - self.ofs[i-1]))
-            self.stream.seek(self.ofs[i], 0)
-            yield data
+            if self.ofs[i] <= self.ofs[i - 1]:
+                raise ValueError(f"ofs 非严格递增：ofs[{i-1}]={self.ofs[i-1]} >= ofs[{i}]={self.ofs[i]}")
+
+        # 4) 导出文件
+        for i in range(segment_count):
+            if i not in rev:
+                continue  # 无映射，跳过
+
+            start = self.ofs[i]
+            end = self.ofs[i + 1]
+            size = end - start
+
+            self.stream.seek(start, 0)
+            data = self.stream.read(size)
+
+            # HCA 检查
+            is_hca = data.startswith(HCAType.HCA.value) or data.startswith(HCAType.EHCA.value)
+            if not is_hca:
+                raise ValueError(f"{rev[i]} 不是 HCA 数据")
+
+            filename = os.path.join(exp_dir, f"{rev[i]}.hca")
+            with open(filename, "wb") as f:
+                f.write(data)
 
     def stringtypes(self, intsize: int) -> str:
         if intsize == 1:
