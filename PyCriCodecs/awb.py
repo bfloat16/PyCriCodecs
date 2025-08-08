@@ -37,31 +37,28 @@ class AWB:
     def extract(self, a: dict, exp_dir: str):
         os.makedirs(exp_dir, exist_ok=True)
 
-        # 1) 先处理 a，生成反转映射 rev（只保留有索引的项）
         rev = {}
         for name, idx_list in a.items():
             if len(idx_list) > 1:
                 raise ValueError(f"{name} 对应多个 index: {idx_list}")
-            if len(idx_list) == 1:  # 有索引才保留
+            if len(idx_list) == 1:
                 idx = idx_list[0]
                 if idx in rev:
-                    raise ValueError(f"索引冲突：index {idx} 映射到 {rev[idx]} 和 {name}")
-                rev[idx] = name
+                    rev[idx] = rev[idx] + ";" + name
+                else:
+                    rev[idx] = name
 
-        # 2) 检查段数是否一致
-        segment_count = len(self.ofs) - 1  # 段总数
+        segment_count = len(self.ofs) - 1
         if len(rev) != segment_count:
             raise ValueError(f"映射段数 {len(rev)} 与实际段数 {segment_count} 不一致")
 
-        # 3) 校验 ofs 递增
         for i in range(1, len(self.ofs)):
             if self.ofs[i] <= self.ofs[i - 1]:
                 raise ValueError(f"ofs 非严格递增：ofs[{i-1}]={self.ofs[i-1]} >= ofs[{i}]={self.ofs[i]}")
 
-        # 4) 导出文件
         for i in range(segment_count):
             if i not in rev:
-                continue  # 无映射，跳过
+                continue
 
             start = self.ofs[i]
             end = self.ofs[i + 1]
