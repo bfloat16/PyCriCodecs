@@ -1,0 +1,7 @@
+[project]
+name = "pycricodecs"
+version = "1.0.0"
+description = "acb awb hca parser"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
