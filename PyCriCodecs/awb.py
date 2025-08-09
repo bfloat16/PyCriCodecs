@@ -1,4 +1,5 @@
 import os
+from tqdm import tqdm
 from io import BytesIO, FileIO
 from struct import iter_unpack
 
@@ -8,10 +9,8 @@ class AWB:
     def __init__(self, stream):
         if type(stream) == str:
             self.stream = FileIO(stream)
-            self.filename = stream
         else:
             self.stream = BytesIO(stream)
-            self.filename = ""
         self.readheader()
     
     def readheader(self):
@@ -39,14 +38,21 @@ class AWB:
 
         rev = {}
         for name, idx_list in a.items():
-            if len(idx_list) > 1:
-                raise ValueError(f"{name} 对应多个 index: {idx_list}")
+            if len(idx_list) == 0:
+                continue
             if len(idx_list) == 1:
                 idx = idx_list[0]
                 if idx in rev:
                     rev[idx] = rev[idx] + ";" + name
                 else:
                     rev[idx] = name
+            else:
+                for copy_num, idx in enumerate(idx_list, start=1):
+                    new_name = f"{name}_#{copy_num}"
+                    if idx in rev:
+                        rev[idx] = rev[idx] + ";" + new_name
+                    else:
+                        rev[idx] = new_name
 
         segment_count = len(self.ofs) - 1
         if len(rev) != segment_count:

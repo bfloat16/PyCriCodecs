@@ -22,8 +22,10 @@ def extract_one(acb_path: Path, out_root: Path):
         awb = AWB(embedded_awb_bytes)
     else:
         external_awb = acb_path.with_suffix(".awb")
+        if 'vo_adv_0000011' in external_awb.name:
+            pass
         if not external_awb.exists():
-            return
+            return  
         awb = AWB(str(external_awb))
 
     out_dir = out_root / acb_path.stem
