@@ -1,31 +1,12 @@
-# -*- coding: utf-8 -*-
-"""
-HCA decryptor (no audio decode):
-- Parse HCA header
-- Build cipher table from ciph type + (keycode, subkey)
-- Decrypt every frame to plaintext (equivalent to ciph=0)
-- Rebuild per-frame CRC and write a brand-new HCA with ciph=0 and valid header CRC
-
-Key combining rule you asked:
-    keycode = keycode * ( ((uint64_t)subkey << 16u) | ((uint16_t)~subkey + 2u) )
-
-Python: treat subkey as 16-bit; the multiplication is done in Python int then we pass
-the (low 56 bits) to the cipher initializer.
-"""
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Iterator, Tuple
+from typing import Optional
 import struct
 import argparse
-import sys
-import os
 
 HCA_MASK = 0x7F7F7F7F
 SYNC_WORD = 0xFFFF
 
-# ----------------------------
-# CRC16 (same table as clHCA)
-# ----------------------------
 _CRC_TABLE = [
     0x0000,0x8005,0x800F,0x000A,0x801B,0x001E,0x0014,0x8011,0x8033,0x0036,0x003C,0x8039,0x0028,0x802D,0x8027,0x0022,
     0x8063,0x0066,0x006C,0x8069,0x0078,0x807D,0x8077,0x0072,0x0050,0x8055,0x805F,0x005A,0x804B,0x004E,0x0044,0x8041,
@@ -51,7 +32,6 @@ def crc16_sum(data: bytes) -> int:
         s = ((s << 8) & 0xFFFF) ^ _CRC_TABLE[((s >> 8) ^ b) & 0xFF]
     return s
 
-# quick inversion helper: compute last 2 bytes so that crc(full)==0
 from collections import defaultdict
 _VAL2IDX = defaultdict(list)
 for idx,val in enumerate(_CRC_TABLE):
@@ -72,9 +52,6 @@ def crc16_tail_bytes(prefix: bytes) -> tuple[int,int]:
             return x, y
     raise RuntimeError("CRC tail solving failed")
 
-# ----------------------------
-# Bitreader
-# ----------------------------
 class BitReader:
     def __init__(self, data: bytes):
         self.data = data
@@ -101,9 +78,6 @@ class BitReader:
     def skip(self, n:int):
         self.bit += n
 
-# ----------------------------
-# Cipher tables
-# ----------------------------
 def _cipher_init0() -> bytes:
     return bytes(range(256))
 
@@ -192,9 +166,6 @@ def build_cipher_table(ciph_type: int, keycode: int) -> bytes:
     else:
         raise ValueError(f"Unsupported ciph type: {ciph_type}")
 
-# ----------------------------
-# Header parsing
-# ----------------------------
 @dataclass
 class HCAHeader:
     version: int
@@ -468,9 +439,6 @@ def build_plain_header_bytes(src: HCAHeader) -> bytes:
     x,y = crc16_tail_bytes(header_wo_crc)
     return header_wo_crc + bytes([x,y])
 
-# ----------------------------
-# Key + subkey combine
-# ----------------------------
 def combine_keycode_with_subkey(keycode: int, subkey: int) -> int:
     subkey64 = subkey & 0xFFFFFFFFFFFFFFFF
     hi = (subkey64 << 16) & 0xFFFFFFFFFFFFFFFF
@@ -479,9 +447,6 @@ def combine_keycode_with_subkey(keycode: int, subkey: int) -> int:
     new_key = (keycode * factor) & ((1 << 56) - 1)   # clHCA 实际只用低56位
     return new_key
 
-# ----------------------------
-# Main conversion
-# ----------------------------
 def decrypt_hca_to_plain(in_path: str, out_path: str, keycode: int, subkey: Optional[int]):
     with open(in_path, 'rb') as f:
         data = f.read()
@@ -524,19 +489,14 @@ def decrypt_hca_to_plain(in_path: str, out_path: str, keycode: int, subkey: Opti
     with open(out_path, 'wb') as f:
         f.write(out)
 
-    # quick sanity
-    # - header crc must be 0
     assert crc16_sum(out[:len(out_header)]) == 0, "Header CRC not zero"
-    # - each frame crc must be 0
+
     for i in range(total):
         s = len(out_header) + i*frame_size
         e = s + frame_size
         if e > len(out): break
         assert crc16_sum(out[s:e]) == 0, f"Frame {i} CRC not zero"
 
-# ----------------------------
-# CLI
-# ----------------------------
 def _parse_int(x: str) -> int:
     x = x.strip().lower()
     if x.startswith("0x"):
