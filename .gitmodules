@@ -1,0 +1,4 @@
+[submodule "CriCodecs/pybind11"]
+	path = CriCodecs/pybind11
+	url = ../../pybind/pybind11
+	branch = stable
