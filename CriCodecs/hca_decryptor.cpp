@@ -1,16 +1,16 @@
+#include <array>
+#include <cstdint>
+#include <cstring>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <cstdint>
-#include <vector>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
-#include <array>
-#include <cstring>
+#include <vector>
 
 namespace py = pybind11;
 
-static constexpr uint32_t HCA_MASK = 0x7F7F7F7F;
+static constexpr uint32_t HCA_MASK  = 0x7F7F7F7F;
 static constexpr uint16_t SYNC_WORD = 0xFFFF;
 
 static constexpr uint16_t CRC_TABLE[256] = {
@@ -32,62 +32,46 @@ static constexpr uint16_t CRC_TABLE[256] = {
     0x0220,0x8225,0x822F,0x022A,0x823B,0x023E,0x0234,0x8231,0x8213,0x0216,0x021C,0x8219,0x0208,0x820D,0x8207,0x0202,
 };
 
-static inline uint16_t crc16_sum(const uint8_t *p, size_t n)
+static inline uint16_t crc16_sum(const uint8_t* p, size_t n)
 {
     uint16_t s = 0;
-    for (size_t i = 0; i < n; ++i)
-    {
-        s = (uint16_t)(((s << 8) & 0xFFFF) ^ CRC_TABLE[((s >> 8) ^ p[i]) & 0xFF]);
+    while (n--) {
+        s = uint16_t((s << 8) ^ CRC_TABLE[(s >> 8) ^ *p++]);
     }
     return s;
 }
 
-// 反推最后 2 字节
-static std::pair<uint8_t, uint8_t> crc16_tail_bytes(const uint8_t *prefix, size_t n)
+static inline std::pair<uint8_t, uint8_t> crc16_tail_bytes(const uint8_t* prefix, size_t n)
 {
-    static std::array<int, 65536> inv{}; // -1 表示无
-    static bool built = false;
-    if (!built)
-    {
-        inv.fill(-1);
-        for (int i = 0; i < 256; ++i)
-            inv[CRC_TABLE[i]] = i;
-        built = true;
-    }
-    uint16_t s = 0;
-    for (size_t i = 0; i < n; ++i)
-    {
-        s = (uint16_t)(((s << 8) & 0xFFFF) ^ CRC_TABLE[((s >> 8) ^ prefix[i]) & 0xFF]);
-    }
-    for (int x = 0; x < 256; ++x)
-    {
-        uint16_t s1 = (uint16_t)(((s << 8) & 0xFFFF) ^ CRC_TABLE[((s >> 8) ^ x) & 0xFF]);
-        uint16_t target = (uint16_t)((s1 << 8) & 0xFFFF);
-        int idx = inv[target];
-        if (idx >= 0)
-        {
-            uint8_t y = (uint8_t)(idx ^ (s1 >> 8));
-            return {(uint8_t)x, y};
-        }
-    }
-    throw std::runtime_error("CRC tail solving failed");
+    const uint16_t s = crc16_sum(prefix, n);
+    return {uint8_t(s >> 8), uint8_t(s)};
 }
 
-static inline uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
-static inline uint32_t be24(const uint8_t *p) { return (uint32_t)((p[0] << 16) | (p[1] << 8) | p[2]); }
-static inline uint32_t be32(const uint8_t *p) { return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]); }
-static inline void put_be16(std::vector<uint8_t> &o, uint16_t v)
+static inline uint16_t be16(const uint8_t* p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+static inline uint32_t be24(const uint8_t* p)
+{
+    return (uint32_t)((p[0] << 16) | (p[1] << 8) | p[2]);
+}
+static inline uint32_t be32(const uint8_t* p)
+{
+    return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
+}
+
+static inline void put_be16(std::vector<uint8_t>& o, uint16_t v)
 {
     o.push_back((v >> 8) & 0xFF);
     o.push_back(v & 0xFF);
 }
-static inline void put_be24(std::vector<uint8_t> &o, uint32_t v)
+static inline void put_be24(std::vector<uint8_t>& o, uint32_t v)
 {
     o.push_back((v >> 16) & 0xFF);
     o.push_back((v >> 8) & 0xFF);
     o.push_back(v & 0xFF);
 }
-static inline void put_be32(std::vector<uint8_t> &o, uint32_t v)
+static inline void put_be32(std::vector<uint8_t>& o, uint32_t v)
 {
     o.push_back((v >> 24) & 0xFF);
     o.push_back((v >> 16) & 0xFF);
@@ -97,63 +81,73 @@ static inline void put_be32(std::vector<uint8_t> &o, uint32_t v)
 
 struct HCAHeader
 {
-    uint16_t version = 0, header_size = 0;
-    uint8_t channels = 0;
-    uint32_t sample_rate = 0;
-    uint32_t frame_count = 0;
-    uint16_t encoder_delay = 0, encoder_padding = 0;
+    uint16_t version         = 0;
+    uint16_t header_size     = 0;
+    uint8_t  channels        = 0;
+    uint32_t sample_rate     = 0;
+    uint32_t frame_count     = 0;
+    uint16_t encoder_delay   = 0;
+    uint16_t encoder_padding = 0;
 
-    uint16_t frame_size = 0;
-    uint8_t min_resolution = 0, max_resolution = 0;
-    uint8_t track_count = 0, channel_config = 0;
-    int stereo_type = -1;
-    uint8_t total_band_count = 0, base_band_count = 0, stereo_band_count = 0;
-    uint8_t bands_per_hfr_group = 0, ms_stereo = 0;
+    uint16_t frame_size          = 0;
+    uint8_t  min_resolution      = 0;
+    uint8_t  max_resolution      = 0;
+    uint8_t  track_count         = 0;
+    uint8_t  channel_config      = 0;
+    int      stereo_type         = -1;
+    uint8_t  total_band_count    = 0;
+    uint8_t  base_band_count     = 0;
+    uint8_t  stereo_band_count   = 0;
+    uint8_t  bands_per_hfr_group = 0;
+    uint8_t  ms_stereo           = 0;
 
-    // 可选
-    bool has_vbr = false;
-    uint16_t vbr_max_frame_size = 0, vbr_noise_level = 0;
-    int ath_type = -1;
-    bool has_ath = false;
-    bool loop_flag = false;
-    uint32_t loop_start_frame = 0, loop_end_frame = 0;
-    uint16_t loop_start_delay = 0, loop_end_padding = 0;
-    bool has_ciph = false;
-    uint16_t ciph_type = 0;
-    bool has_rva = false;
-    float rva_volume = 0.f;
-    bool has_comm = false;
+    // Optional
+    bool        has_vbr            = false;
+    uint16_t    vbr_max_frame_size = 0;
+    uint16_t    vbr_noise_level    = 0;
+    int         ath_type           = -1;
+    bool        has_ath            = false;
+    bool        loop_flag          = false;
+    uint32_t    loop_start_frame   = 0;
+    uint32_t    loop_end_frame     = 0;
+    uint16_t    loop_start_delay   = 0;
+    uint16_t    loop_end_padding   = 0;
+    bool        has_ciph           = false;
+    uint16_t    ciph_type          = 0;
+    bool        has_rva            = false;
+    float       rva_volume         = 0.f;
+    bool        has_comm           = false;
     std::string comment;
 
     size_t data_offset = 0;
-    bool used_comp = true; // 否则是 dec
+    bool   used_comp   = true;
 };
 
-static HCAHeader parse_hca_header(const std::vector<uint8_t> &buf)
+static HCAHeader parse_hca_header(const std::vector<uint8_t>& buf)
 {
     if (buf.size() < 8)
-        throw std::runtime_error("Too small");
-    const uint8_t *p = buf.data();
-    uint32_t tag = be32(p);
+        throw std::runtime_error("Error: File too small !");
+    const uint8_t* p   = buf.data();
+    uint32_t       tag = be32(p);
     p += 4;
     if ((tag & HCA_MASK) != 0x48434100)
-        throw std::runtime_error("Not HCA");
+        throw std::runtime_error("Error: Not encrypted HCA !");
     HCAHeader h{};
     h.version = be16(p);
     p += 2;
     h.header_size = be16(p);
     p += 2;
     if (buf.size() < h.header_size)
-        throw std::runtime_error("Short header");
+        throw std::runtime_error("Error: HCA head is too short !");
     if (crc16_sum(buf.data(), h.header_size) != 0)
-        throw std::runtime_error("Header CRC failed");
+        throw std::runtime_error("Error: HCA header CRC failed !");
 
     // fmt
     tag = be32(p);
     if ((tag & HCA_MASK) != 0x666D7400)
-        throw std::runtime_error("Missing fmt");
+        throw std::runtime_error("Error: HCA missing fmt !");
     p += 4;
-    h.channels = *p++;
+    h.channels    = *p++;
     h.sample_rate = be24(p);
     p += 3;
     h.frame_count = be32(p);
@@ -165,51 +159,47 @@ static HCAHeader parse_hca_header(const std::vector<uint8_t> &buf)
 
     // comp / dec
     tag = be32(p);
-    if ((tag & HCA_MASK) == 0x636F6D70)
-    { // comp
+    if ((tag & HCA_MASK) == 0x636F6D70) {   // comp
         p += 4;
-        h.used_comp = true;
+        h.used_comp  = true;
         h.frame_size = be16(p);
         p += 2;
-        h.min_resolution = *p++;
-        h.max_resolution = *p++;
-        h.track_count = *p++;
-        h.channel_config = *p++;
-        h.total_band_count = *p++;
-        h.base_band_count = *p++;
-        h.stereo_band_count = *p++;
+        h.min_resolution      = *p++;
+        h.max_resolution      = *p++;
+        h.track_count         = *p++;
+        h.channel_config      = *p++;
+        h.total_band_count    = *p++;
+        h.base_band_count     = *p++;
+        h.stereo_band_count   = *p++;
         h.bands_per_hfr_group = *p++;
-        h.ms_stereo = *p++;
-        p++; // reserved
+        h.ms_stereo           = *p++;
+        p++;   // reserved
     }
-    else if ((tag & HCA_MASK) == 0x64656300)
-    { // dec\0
+    else if ((tag & HCA_MASK) == 0x64656300) {   // dec\0
         p += 4;
-        h.used_comp = false;
+        h.used_comp  = false;
         h.frame_size = be16(p);
         p += 2;
-        h.min_resolution = *p++;
-        h.max_resolution = *p++;
-        h.total_band_count = (uint8_t)(*p++ + 1);
-        h.base_band_count = (uint8_t)(*p++ + 1);
-        uint8_t tc_cc = *p++;
-        h.track_count = (tc_cc >> 4) & 0xF;
-        h.channel_config = tc_cc & 0xF;
-        h.stereo_type = *p++;
-        h.stereo_band_count = (h.stereo_type == 0) ? 0 : (h.total_band_count - h.base_band_count);
+        h.min_resolution      = *p++;
+        h.max_resolution      = *p++;
+        h.total_band_count    = (uint8_t)(*p++ + 1);
+        h.base_band_count     = (uint8_t)(*p++ + 1);
+        uint8_t tc_cc         = *p++;
+        h.track_count         = (tc_cc >> 4) & 0xF;
+        h.channel_config      = tc_cc & 0xF;
+        h.stereo_type         = *p++;
+        h.stereo_band_count   = (h.stereo_type == 0) ? 0 : (h.total_band_count - h.base_band_count);
         h.bands_per_hfr_group = 0;
     }
-    else
-    {
-        throw std::runtime_error("Missing comp/dec");
+    else {
+        throw std::runtime_error("Error: HCA missing comp/dec !");
     }
 
     // vbr?
     tag = be32(p);
-    if ((tag & HCA_MASK) == 0x76627200)
-    {
+    if ((tag & HCA_MASK) == 0x76627200) {
         p += 4;
-        h.has_vbr = true;
+        h.has_vbr            = true;
         h.vbr_max_frame_size = be16(p);
         p += 2;
         h.vbr_noise_level = be16(p);
@@ -218,24 +208,21 @@ static HCAHeader parse_hca_header(const std::vector<uint8_t> &buf)
     }
 
     // ath?
-    if ((tag & HCA_MASK) == 0x61746800)
-    {
+    if ((tag & HCA_MASK) == 0x61746800) {
         p += 4;
-        h.has_ath = true;
+        h.has_ath  = true;
         h.ath_type = be16(p);
         p += 2;
         tag = be32(p);
     }
-    else
-    {
+    else {
         h.ath_type = (h.version < 0x0200) ? 1 : 0;
     }
 
     // loop?
-    if ((tag & HCA_MASK) == 0x6C6F6F70)
-    {
+    if ((tag & HCA_MASK) == 0x6C6F6F70) {
         p += 4;
-        h.loop_flag = true;
+        h.loop_flag        = true;
         h.loop_start_frame = be32(p);
         p += 4;
         h.loop_end_frame = be32(p);
@@ -248,61 +235,54 @@ static HCAHeader parse_hca_header(const std::vector<uint8_t> &buf)
     }
 
     // ciph?
-    if ((tag & HCA_MASK) == 0x63697068)
-    {
+    if ((tag & HCA_MASK) == 0x63697068) {
         p += 4;
-        h.has_ciph = true;
+        h.has_ciph  = true;
         h.ciph_type = be16(p);
         p += 2;
         tag = be32(p);
     }
-    else
-    {
+    else {
         h.ciph_type = 0;
     }
 
     // rva?
-    if ((tag & HCA_MASK) == 0x72766100)
-    {
+    if ((tag & HCA_MASK) == 0x72766100) {
         p += 4;
         uint32_t u = be32(p);
         p += 4;
         float f;
         std::memcpy(&f, &u, 4);
-        h.has_rva = true;
+        h.has_rva    = true;
         h.rva_volume = f;
-        tag = be32(p);
+        tag          = be32(p);
     }
 
     // comm?
-    if ((tag & HCA_MASK) == 0x636F6D6D)
-    {
+    if ((tag & HCA_MASK) == 0x636F6D6D) {
         p += 4;
-        h.has_comm = true;
+        h.has_comm   = true;
         uint8_t clen = *p++;
-        h.comment.assign((const char *)p, (const char *)p + clen);
+        h.comment.assign((const char*)p, (const char*)p + clen);
         p += clen;
         tag = be32(p);
     }
 
     // pad?
-    if ((tag & HCA_MASK) == 0x70616400)
-    {
-        // 填充到 header_size-2
-        size_t used = (size_t)(p - buf.data());
+    if ((tag & HCA_MASK) == 0x70616400) {
+        size_t used      = (size_t)(p - buf.data());
         size_t pad_bytes = (h.header_size - 2) - used;
         p += pad_bytes;
     }
-    else
-    {
-        // 没有 pad，p 指向最后 CRC（2 bytes）之前
+    else {
+        // Without pad, p points to the end before the last CRC (2 bytes)
     }
 
     h.data_offset = h.header_size;
     return h;
 }
 
-static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader &s)
+static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader& s)
 {
     std::vector<uint8_t> chunks;
 
@@ -315,8 +295,7 @@ static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader &s)
     put_be16(chunks, s.encoder_padding);
 
     // comp / dec
-    if (s.used_comp)
-    {
+    if (s.used_comp) {
         chunks.insert(chunks.end(), {'c', 'o', 'm', 'p'});
         put_be16(chunks, s.frame_size);
         chunks.push_back(s.min_resolution);
@@ -328,10 +307,9 @@ static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader &s)
         chunks.push_back(s.stereo_band_count);
         chunks.push_back(s.bands_per_hfr_group);
         chunks.push_back(s.ms_stereo);
-        chunks.push_back(0x00); // reserved
+        chunks.push_back(0x00);   // reserved
     }
-    else
-    {
+    else {
         chunks.insert(chunks.end(), {'d', 'e', 'c', 0x00});
         put_be16(chunks, s.frame_size);
         chunks.push_back(s.min_resolution);
@@ -343,21 +321,18 @@ static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader &s)
     }
 
     // vbr
-    if (s.has_vbr)
-    {
+    if (s.has_vbr) {
         chunks.insert(chunks.end(), {'v', 'b', 'r', 0x00});
         put_be16(chunks, s.vbr_max_frame_size);
         put_be16(chunks, s.vbr_noise_level);
     }
 
-    if (s.has_ath)
-    {
+    if (s.has_ath) {
         chunks.insert(chunks.end(), {'a', 't', 'h', 0x00});
         put_be16(chunks, (uint16_t)s.ath_type);
     }
 
-    if (s.loop_flag)
-    {
+    if (s.loop_flag) {
         chunks.insert(chunks.end(), {'l', 'o', 'o', 'p'});
         put_be32(chunks, s.loop_start_frame);
         put_be32(chunks, s.loop_end_frame);
@@ -365,22 +340,19 @@ static std::vector<uint8_t> build_plain_header_bytes(const HCAHeader &s)
         put_be16(chunks, s.loop_end_padding);
     }
 
-    if (s.has_ciph)
-    {
+    if (s.has_ciph) {
         chunks.insert(chunks.end(), {'c', 'i', 'p', 'h'});
-        put_be16(chunks, 0); // 置为 0（明文）
+        put_be16(chunks, 0);   // Set to 0 (plain text)
     }
 
-    if (s.has_rva)
-    {
+    if (s.has_rva) {
         chunks.insert(chunks.end(), {'r', 'v', 'a', 0x00});
         uint32_t u;
         std::memcpy(&u, &s.rva_volume, 4);
         put_be32(chunks, u);
     }
 
-    if (s.has_comm && !s.comment.empty())
-    {
+    if (s.has_comm && !s.comment.empty()) {
         chunks.insert(chunks.end(), {'c', 'o', 'm', 'm'});
         chunks.push_back((uint8_t)std::min<size_t>(255, s.comment.size()));
         chunks.insert(chunks.end(), s.comment.begin(), s.comment.begin() + std::min<size_t>(255, s.comment.size()));
@@ -409,12 +381,11 @@ static std::array<uint8_t, 256> cipher_init0()
 static std::array<uint8_t, 256> cipher_init1()
 {
     std::array<uint8_t, 256> t{};
-    t[0] = 0;
+    t[0]    = 0;
     t[0xFF] = 0xFF;
     int mul = 13, add = 11;
     int v = 0;
-    for (int i = 1; i < 255; ++i)
-    {
+    for (int i = 1; i < 255; ++i) {
         v = (v * mul + add) & 0xFF;
         if (v == 0 || v == 0xFF)
             v = (v * mul + add) & 0xFF;
@@ -424,12 +395,11 @@ static std::array<uint8_t, 256> cipher_init1()
 }
 static void cipher_init56_create_table(uint8_t key_byte, uint8_t out16[16])
 {
-    int mul = ((key_byte & 1) << 3) | 5;
-    int add = (key_byte & 0xE) | 1;
+    int     mul = ((key_byte & 1) << 3) | 5;
+    int     add = (key_byte & 0xE) | 1;
     uint8_t key = (key_byte >> 4) & 0xF;
-    for (int i = 0; i < 16; ++i)
-    {
-        key = (uint8_t)((key * mul + add) & 0xF);
+    for (int i = 0; i < 16; ++i) {
+        key      = (uint8_t)((key * mul + add) & 0xF);
         out16[i] = key;
     }
 }
@@ -437,9 +407,8 @@ static std::array<uint8_t, 256> cipher_init56(uint64_t keycode_low56)
 {
     if (keycode_low56 != 0)
         keycode_low56 = (keycode_low56 - 1) & ((1ULL << 56) - 1);
-    uint8_t kc[8]{}; // 仅用 7 字节
-    for (int i = 0; i < 7; ++i)
-    {
+    uint8_t kc[8]{};
+    for (int i = 0; i < 7; ++i) { // Only 7 bytes
         kc[i] = (uint8_t)(keycode_low56 & 0xFF);
         keycode_low56 >>= 8;
     }
@@ -465,8 +434,7 @@ static std::array<uint8_t, 256> cipher_init56(uint64_t keycode_low56)
     uint8_t base_r[16];
     cipher_init56_create_table(kc[0], base_r);
     uint8_t base[256]{};
-    for (int r = 0; r < 16; ++r)
-    {
+    for (int r = 0; r < 16; ++r) {
         uint8_t base_c[16];
         cipher_init56_create_table(seed[r], base_c);
         uint8_t nb = (uint8_t)((base_r[r] & 0xF) << 4);
@@ -475,17 +443,14 @@ static std::array<uint8_t, 256> cipher_init56(uint64_t keycode_low56)
     }
 
     std::array<uint8_t, 256> t{};
-    t[0] = 0;
+    t[0]    = 0;
     t[0xFF] = 0xFF;
     int pos = 1, x = 0;
-    for (int i = 0; i < 256; ++i)
-    {
-        x = (x + 17) & 0xFF;
+    for (int i = 0; i < 256; ++i) {
+        x          = (x + 17) & 0xFF;
         uint8_t bx = base[x];
-        if (bx != 0 && bx != 0xFF)
-        {
-            if (pos < 0xFF)
-            {
+        if (bx != 0 && bx != 0xFF) {
+            if (pos < 0xFF) {
                 t[pos] = bx;
                 ++pos;
             }
@@ -503,37 +468,35 @@ static std::array<uint8_t, 256> build_cipher_table(uint16_t ciph_type, uint64_t 
         return cipher_init1();
     if (ciph_type == 56)
         return cipher_init56(key_low56);
-    throw std::runtime_error("Unsupported ciph type");
+    throw std::runtime_error("Error: Unsupported ciph type !");
 }
 
 static inline uint64_t combine_keycode_with_subkey(uint64_t keycode, uint64_t subkey)
 {
     uint64_t subkey64 = subkey & 0xFFFFFFFFFFFFFFFFULL;
-    uint64_t hi = (subkey64 << 16);
-    uint64_t lo = ((~subkey64) + 2ULL) & 0xFFFFULL; // (uint16_t)~subkey + 2
-    uint64_t factor = hi | lo;
-    uint64_t new_key = (keycode * factor) & ((1ULL << 56) - 1);
+    uint64_t hi       = (subkey64 << 16);
+    uint64_t lo       = ((~subkey64) + 2ULL) & 0xFFFFULL;   // (uint16_t)~subkey + 2
+    uint64_t factor   = hi | lo;
+    uint64_t new_key  = (keycode * factor) & ((1ULL << 56) - 1);
     return new_key;
 }
 
-static std::vector<uint8_t> decrypt_hca_to_plain_bytes(const std::vector<uint8_t> &in_bytes, uint64_t mainkey, py::object py_subkey)
+static std::vector<uint8_t> decrypt_hca_to_plain_bytes(const std::vector<uint8_t>& in_bytes, uint64_t mainkey, py::object py_subkey)
 {
     HCAHeader H = parse_hca_header(in_bytes);
 
     uint64_t effective_key = mainkey & ((1ULL << 56) - 1);
-    if (!py_subkey.is_none())
-    {
+    if (!py_subkey.is_none()) {
         uint64_t subkey = py_subkey.cast<uint64_t>();
-        effective_key = combine_keycode_with_subkey(effective_key, subkey);
+        effective_key   = combine_keycode_with_subkey(effective_key, subkey);
     }
 
-    auto table = build_cipher_table(H.ciph_type, effective_key);
-    std::vector<uint8_t> out = build_plain_header_bytes(H);
+    auto                 table = build_cipher_table(H.ciph_type, effective_key);
+    std::vector<uint8_t> out   = build_plain_header_bytes(H);
 
     size_t off = H.data_offset;
     size_t fsz = H.frame_size;
-    for (uint32_t i = 0; i < H.frame_count; ++i)
-    {
+    for (uint32_t i = 0; i < H.frame_count; ++i) {
         if (off + fsz > in_bytes.size())
             break;
         std::vector<uint8_t> frame(in_bytes.begin() + off, in_bytes.begin() + off + fsz);
@@ -541,7 +504,7 @@ static std::vector<uint8_t> decrypt_hca_to_plain_bytes(const std::vector<uint8_t
         for (size_t j = 0; j < frame.size(); ++j)
             frame[j] = table[frame[j]];
 
-        auto tail = crc16_tail_bytes(frame.data(), frame.size() - 2);
+        auto tail               = crc16_tail_bytes(frame.data(), frame.size() - 2);
         frame[frame.size() - 2] = tail.first;
         frame[frame.size() - 1] = tail.second;
 
@@ -549,9 +512,8 @@ static std::vector<uint8_t> decrypt_hca_to_plain_bytes(const std::vector<uint8_t
         off += fsz;
     }
     const size_t new_hdr_sz = (out.size() >= 8) ? (size_t)((out[6] << 8) | out[7]) : 0;
-    if (crc16_sum(out.data(), new_hdr_sz) != 0)
-    {
-        throw std::runtime_error("Header CRC not zero after rebuild (post-build check)");
+    if (crc16_sum(out.data(), new_hdr_sz) != 0) {
+        throw std::runtime_error("Error: Header CRC not zero after rebuild (post-build check)");
     }
 
     return out;
@@ -562,8 +524,7 @@ PYBIND11_MODULE(hcadecrypt, m)
     m.doc() = "HCA decryptor (no audio decode): decrypt to ciph=0 and rebuild CRCs";
 
     // Python: decrypt(data: bytes, mainkey: int, subkey: Optional[int]) -> bytes
-    m.def("decrypt", [](py::bytes data, uint64_t mainkey, py::object subkey) -> py::bytes
-          {
+    m.def("decrypt", [](py::bytes data, uint64_t mainkey, py::object subkey) -> py::bytes {
               std::string in = data;
               std::vector<uint8_t> buf(in.begin(), in.end());
               auto out = decrypt_hca_to_plain_bytes(buf, mainkey, subkey);
