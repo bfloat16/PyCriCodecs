@@ -4,13 +4,16 @@ from io import BytesIO, FileIO
 from struct import iter_unpack
 
 from .chunk import *
+from .hcadecrypt import decrypt
 
 class AWB:
-    def __init__(self, stream):
+    def __init__(self, stream, mainkey):
         if type(stream) == str:
             self.stream = FileIO(stream)
         else:
             self.stream = BytesIO(stream)
+
+        self.mainkey = mainkey
         self.readheader()
     
     def readheader(self):
@@ -62,7 +65,7 @@ class AWB:
             if self.ofs[i] <= self.ofs[i - 1]:
                 raise ValueError(f"ofs 非严格递增：ofs[{i-1}]={self.ofs[i-1]} >= ofs[{i}]={self.ofs[i]}")
 
-        for i in range(segment_count):
+        for i in tqdm(range(segment_count), ncols=150, position=1, leave=False):
             if i not in rev:
                 continue
 
@@ -73,10 +76,11 @@ class AWB:
             self.stream.seek(start, 0)
             data = self.stream.read(size)
 
-            # HCA 检查
-            is_hca = data.startswith(HCAType.HCA.value) or data.startswith(HCAType.EHCA.value)
-            if not is_hca:
-                raise ValueError(f"{rev[i]} 不是 HCA 数据")
+            if data.startswith(HCAType.HCA.value):
+                pass
+
+            elif data.startswith(HCAType.EHCA.value):
+                data = decrypt(data, self.mainkey, self.subkey)
 
             filename = os.path.join(exp_dir, f"{rev[i]}.hca")
             with open(filename, "wb") as f:
