@@ -4,7 +4,7 @@ from io import BytesIO, FileIO
 from struct import iter_unpack
 
 from .chunk import *
-from .hcadecrypt import decrypt
+from .hca_decryptor import decrypt
 
 class AWB:
     def __init__(self, stream, mainkey):
